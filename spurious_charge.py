@@ -48,15 +48,24 @@ if (len(remainder)<2):
     print sys.argv[0]+' <output basename> <root files>'
     sys.exit()
 
+def getHeaderValue(tree,name):
+    tree.GetEntry(0)
+    stringdata = tree.GetBranch(name).GetLeaf("string").GetValuePointer()
+    b = bytearray()
+    for iword in range(0,len(stringdata)):
+        word = stringdata[iword]
+        #print(word)
+        for ibyte in range(0,8):
+            b.append(word & 0xFF)
+            word >>= 8
+    #print(b)
+    return float(b)
+
 def runnum(filename):
     ints = [int(c) for c in re.split(r'(\d+)',filename) if c.isdigit()]
     return ints[-2]
 
 remainder.sort(key=runnum)
-#for i in range(1,len(remainder)):
-    #print([int(c) for c in re.split(r'(\d+)',remainder[i]) if c.isdigit()])
-    #print runnum(remainder[i])
-
 
 print(EXPOSURE,READOUT)
 #if (len(sys.argv)<3):
@@ -72,6 +81,12 @@ for i in range(1,len(remainder)):
     data.Add(remainder[i])
     osm.Add(remainder[i])
     numRuns += 1
+    thefile = TFile(remainder[i])
+    header = thefile.Get("headerTree_0")
+    ogl = getHeaderValue(header,"OGAL")
+    swl = getHeaderValue(header,"SWAL")
+    print("OGL={0}, SWL={1}".format(ogl,swl))
+
 
 #x=0 and y=0 look weird (negative or extreme values)
 #x=[370,450] is overscan
