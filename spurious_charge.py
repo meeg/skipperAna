@@ -4,6 +4,8 @@ import array
 import re
 from ROOT import gROOT, gStyle, TFile, TTree, TChain, TMVA, TCut, TCanvas, gDirectory, TH1, TGraph, gPad, TF1, THStack, TLegend, TGraphErrors, TLatex
 
+import skipper_utils
+
 gROOT.SetBatch(True)
 gStyle.SetOptStat(110011)
 gStyle.SetOptFit(1)
@@ -17,7 +19,7 @@ NROWS = 700 #number of rows read out, per file
 
 OHDU = 1
 
-gain = 500
+gain = 400
 
 OHDPLOTS = False
 OSMPLOTS = False
@@ -48,24 +50,8 @@ if (len(remainder)<2):
     print sys.argv[0]+' <output basename> <root files>'
     sys.exit()
 
-def getHeaderValue(tree,name):
-    tree.GetEntry(0)
-    stringdata = tree.GetBranch(name).GetLeaf("string").GetValuePointer()
-    b = bytearray()
-    for iword in range(0,len(stringdata)):
-        word = stringdata[iword]
-        #print(word)
-        for ibyte in range(0,8):
-            b.append(word & 0xFF)
-            word >>= 8
-    #print(b)
-    return float(b)
-
-def runnum(filename):
-    ints = [int(c) for c in re.split(r'(\d+)',filename) if c.isdigit()]
-    return ints[-2]
-
-remainder.sort(key=runnum)
+infiles = remainder[1:]
+infiles.sort(key=skipper_utils.decodeRunnum)
 
 print(EXPOSURE,READOUT)
 #if (len(sys.argv)<3):
@@ -76,15 +62,15 @@ outfilename = remainder[0]
 data = TChain("skPixTree")
 osm = TChain("osMeanTree")
 numRuns = 0
-for i in range(1,len(remainder)):
-    print(remainder[i])
-    data.Add(remainder[i])
-    osm.Add(remainder[i])
+for i in range(0,len(infiles)):
+    print(infiles[i])
+    data.Add(infiles[i])
+    osm.Add(infiles[i])
     numRuns += 1
-    thefile = TFile(remainder[i])
+    thefile = TFile(infiles[i])
     header = thefile.Get("headerTree_0")
-    ogl = getHeaderValue(header,"OGAL")
-    swl = getHeaderValue(header,"SWAL")
+    ogl = skipper_utils.getHeaderValue(header,"OGAL")
+    swl = skipper_utils.getHeaderValue(header,"SWAL")
     print("OGL={0}, SWL={1}".format(ogl,swl))
 
 
@@ -95,21 +81,11 @@ for i in range(1,len(remainder)):
 #y=[625,700] is vertical overscan
 #y=[1,624] looks real - matches dimension in paper (624 pixels)
 
-#dark current for real pixel: exposure+readout
-#for overscan: 
-ipeak = 0
-#peakfuncs = []
-#funcnames = []
 funcformulas = []
 for ipeak in range(0,5):
     funcformulas.append("[0]*(TMath::Gaus(x,[1]+{0}*[2],[2]*[3],1)*TMath::Poisson({0},[4]) )".format(ipeak))
-    #peakfuncs.append(TF1("peak{0}".format(ipeak),"[0]*(TMath::Gaus(x,[1]+{0}*[2],[2]*[3])*TMath::Poisson({0},[4]) )".format(ipeak)))
-    #funcnames.append("peak{0}".format(ipeak))
 
-#print(" + ".join(funcnames))
-fitfunc = TF1("fitfunc"," + ".join(funcformulas))
-
-#fitfunc = TF1("fitfunc","[0]*(TMath::Gaus(x,[1],[3])*TMath::Poisson(0,[4]) + TMath::Gaus(x,[1]+[2],[3])*TMath::Poisson(1,[4]) + TMath::Gaus(x,[1]+2*[2],[3])*TMath::Poisson(2,[4]) )",-2,3)
+fitfunc = skipper_utils.poissonFitfunc()
 
 isMonsoon = (gain<100)
 
@@ -159,25 +135,13 @@ hdata = gDirectory.Get("hdata")
 #c.Print(outfilename+".pdf]");
 #sys.exit(0)
 
-s0 = hdata.Fit("gaus","QS","",-0.4*gain,0.4*gain)
-s1 = hdata.Fit("gaus","QS","",0.6*gain,1.4*gain)
-aduZero = s0.Parameter(1)
-aduPerElectron = s1.Parameter(1) - s0.Parameter(1)
-
-s0 = hdata.Fit("gaus","QS","",aduZero-0.4*aduPerElectron,aduZero+0.4*aduPerElectron)
+fitvals={}
+skipper_utils.fitPeaksGaus(hdata,gain,fitvals)
 c.Print(outfilename+".pdf");
-s1 = hdata.Fit("gaus","QS","",aduZero+0.7*aduPerElectron,aduZero+1.4*aduPerElectron)
-c.Print(outfilename+".pdf");
-aduZero = s0.Parameter(1)
-aduPerElectron = s1.Parameter(1) - s0.Parameter(1)
-noise = s0.Parameter(2)/aduPerElectron
 
+print(fitvals)
 
-
-
-fitfunc.SetParameters(hdata.GetEntries()*binwidth,aduZero,aduPerElectron,noise,0.1)
-s = hdata.Fit(fitfunc,"QS","")
-s = hdata.Fit(fitfunc,"QSL","")
+skipper_utils.fitPeaksPoisson(fitfunc,hdata,fitvals)
 c.Print(outfilename+".pdf");
 
 #data.Draw("pix>>hdata"+pixbinning,"x>0 && y>0 && "+ohducut,"colz")
@@ -191,74 +155,36 @@ arrPoisson = array.array('d')
 arrPoissonErr = array.array('d')
 arrActiveTime = array.array('d')
 arrZero = array.array('d')
-#arrExposure = array.array('d')
-#arrReadout = array.array('d')
-#arrShift = array.array('d')
+
+htypes = ["prescan","overscan_x","overscan_y","active"]
+regioncuts = ["x>0 && x<8 && y>0","x>369 && y>0","x>=8 && x<=369 && y>624","x>=8 && x<=369 && y>0 && y<=624"]
+exposures = [0.0, (362.0/450)*READOUT/NROWS, READOUT*(624.0/NROWS), 0.5*READOUT*(624.0/NROWS)+EXPOSURE]
 
 latex = TLatex()
+latex.SetNDC(True)
 c.Clear()
 c.Divide(1,4)
 
-c.cd(1)
-gPad.SetLogy(1)
-data.Draw("pix>>hprescan"+pixbinning,"x>0 && x<8 && y>0 &&"+ohducut,"colz")
-prescan = gDirectory.Get("hprescan")
-fitfunc.SetParameters(prescan.GetEntries()*binwidth,aduZero,aduPerElectron,noise,0.01)
-prescan.Fit(fitfunc,"QS","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-s = prescan.Fit(fitfunc,"QSL","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-arrPoisson.append(s.Parameter(4))
-arrPoissonErr.append(s.Error(4))
-arrActiveTime.append(0.0)
-arrZero.append(0.0)
-latex.DrawLatex(500,100,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
+histList = []
+for hnum in range(0,4):
+    c.cd(hnum+1)
+    gPad.SetLogy(1)
+    hname = "h"+htypes[hnum]
+    data.Draw("pix>>"+hname+pixbinning,regioncuts[hnum]+" && "+ohducut,"colz")
+    h = gDirectory.Get(hname)
+    histList.append(h)
+    s = skipper_utils.fitPeaksPoisson(fitfunc,h,fitvals)
+    if (int(s)==0): #good fit
+        arrPoisson.append(s.Parameter(4))
+        arrPoissonErr.append(s.Error(4))
+        arrActiveTime.append(exposures[hnum])
+        arrZero.append(0.0)
+        latex.DrawLatex(0.3,0.8,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
 
-c.cd(2)
-gPad.SetLogy(1)
-data.Draw("pix>>hoverscan_x"+pixbinning,"x>369 && y>0 &&"+ohducut,"colz")
-hoverscan_x = gDirectory.Get("hoverscan_x")
-fitfunc.SetParameters(hoverscan_x.GetEntries()*binwidth,aduZero,aduPerElectron,noise,0.01)
-hoverscan_x.Fit(fitfunc,"QS","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-s = hoverscan_x.Fit(fitfunc,"QSL","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-arrPoisson.append(s.Parameter(4))
-arrPoissonErr.append(s.Error(4))
-arrActiveTime.append((362.0/450)*READOUT/NROWS)
-arrZero.append(0.0)
-latex.DrawLatex(500,100,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
-
-c.cd(3)
-gPad.SetLogy(1)
-data.Draw("pix>>hoverscan_y"+pixbinning,"x>=8 && x<=369 && y>624 &&"+ohducut,"colz")
-hoverscan_y = gDirectory.Get("hoverscan_y")
-fitfunc.SetParameters(hoverscan_y.GetEntries()*binwidth,aduZero,aduPerElectron,noise,0.01)
-hoverscan_y.Fit(fitfunc,"QS","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-s = hoverscan_y.Fit(fitfunc,"QSL","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-arrPoisson.append(s.Parameter(4))
-arrPoissonErr.append(s.Error(4))
-arrActiveTime.append(READOUT*(624.0/NROWS))
-arrZero.append(0.0)
-latex.DrawLatex(500,100,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
-
-c.cd(4)
-gPad.SetLogy(1)
-data.Draw("pix>>hactive"+pixbinning,"x>=8 && x<=369 && y>0 && y<=624 &&"+ohducut,"colz")
-hactive = gDirectory.Get("hactive")
-fitfunc.SetParameters(hactive.GetEntries()*binwidth,aduZero,aduPerElectron,noise,0.1)
-hactive.Fit(fitfunc,"QS","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-s = hactive.Fit(fitfunc,"QSL","",aduZero-0.5*aduPerElectron,aduZero+2.5*aduPerElectron)
-arrPoisson.append(s.Parameter(4))
-arrPoissonErr.append(s.Error(4))
-arrActiveTime.append(0.5*READOUT*(624.0/NROWS)+EXPOSURE)
-arrZero.append(0.0)
-latex.DrawLatex(500,100,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
-
-#print(s_act.Parameter(4), s_osy.Parameter(4), s_osy.Parameter(4)/(s_act.Parameter(4)-s_osy.Parameter(4)))
 
 c.cd()
 c.Print(outfilename+".pdf");
 c.Clear()
-
-#print(0.5*READOUT*(624.0/NROWS)+EXPOSURE)
-#print(0.5*READOUT*(624.0/NROWS)+EXPOSURE)
 
 print(arrPoisson)
 print(arrPoissonErr)
@@ -275,9 +201,9 @@ c.SetLogy(1)
 gStyle.SetStatX(0.9)
 
 
-data.SetAlias("ele","(pix-{0})/{1}".format(aduZero,aduPerElectron))
+data.SetAlias("ele","(pix-{0})/{1}".format(fitvals["zero"],fitvals["gain"]))
 
-data.Draw("ele>>hdata(500,-1,4)","x>0 && y>0 && "+ohducut,"colz")
+data.Draw("ele>>hdata(500,-1,4)","x>8 && y>0 && "+ohducut,"colz")
 c.Print(outfilename+".pdf");
 
 c.SetLogy(0)
