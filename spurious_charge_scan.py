@@ -11,19 +11,15 @@ gStyle.SetOptStat(110011)
 gStyle.SetOptFit(1)
 gStyle.SetPalette(57)
 
-OHDU = 1
-
 gain = 400
 
 settingNames=["SWAL","OGAL"]
 
-options, remainder = getopt.gnu_getopt(sys.argv[1:], 'g:o:x:y:h')
+options, remainder = getopt.gnu_getopt(sys.argv[1:], 'g:x:y:h')
 
 for opt, arg in options:
     if opt=='-g':
         gain = float(arg)
-    if opt=='-o':
-        OHDU = int(arg)
     if opt=='-x':
         settingNames[0] = arg
     if opt=='-y':
@@ -31,8 +27,9 @@ for opt, arg in options:
     elif opt=='-h':
         print("\nUsage: "+sys.argv[0]+" <output basename> <root files>")
         print("Arguments: ")
-        print("\t-g, --gain: initial guess for gain (ADU per electron)")
-        print("\t-o, --ohdu: HDU to analyze")
+        print("\t-g: initial guess for gain (ADU per electron)")
+        print("\t-x: header variable to plot on the X axis")
+        print("\t-y: header variable to plot on the Y axis")
         print("\n")
         sys.exit(0)
 
@@ -70,19 +67,20 @@ latex.SetNDC(True)
 #y=[625,700] is vertical overscan
 #y=[1,624] looks real - matches dimension in paper (624 pixels)
 
+ohdus = []
+
 htypes = ["allpix","prescan","overscan","active"]
 regioncuts = ["x>0 && y>0","x>0 && x<8 && y>0","x>369 && y>0","x>=8 && x<=369 && y>0 && y<=624"]
 
 settingListDict={}
 for settingName in settingNames:
     settingListDict[settingName]=[]
+
 numRuns = 0
 settingString=""#compact string for histogram names
-settingPrintString=""#readable string for labels
 histDict={}#setting string to list of list of histograms
-dataChain = TChain("skPixTree")
+
 for iFile in range(0,len(infiles)):
-    prevSettingString = settingString
     print(infiles[iFile])
     runnum = skipper_utils.decodeRunnum(infiles[iFile])
     thefile = TFile(infiles[iFile])
@@ -104,61 +102,87 @@ for iFile in range(0,len(infiles)):
 
     if settingString not in histDict:
         histDict[settingString]=[]
-    histsThisFile = []
+    histsThisFile = {}
     histDict[settingString].append(histsThisFile)
     fileHistString = settingString+"FILE{0}".format(runnum)
 
+    ohduelists = []
+    if (iFile==0): #first file: get the list of HDUs
+        for ohdu in range(0,6):#LTA data has 1 through 4, Monsoon data has 2 through 5
+            elistname = "e{0}".format(ohdu)
+            n = data.Draw(">>"+elistname,"ohdu=={0}".format(ohdu))
+            if n>0:
+                ohdus.append(ohdu)
+                ohduelists.append(gDirectory.Get(elistname))
+    else: #use the list of HDUs, regenerate the event lists
+        for iHdu in range(0,len(ohdus)):
+            ohdu = ohdus[iHdu]
+            elistname = "e{0}".format(ohdu)
+            n = data.Draw(">>"+elistname,"ohdu=={0}".format(ohdu))
+            ohduelists.append(gDirectory.Get(elistname))
+
     c.Clear()
-    c.Divide(1,4)
-    latex.DrawLatex(0.1,0.9,settingPrintString)
-
-    fitvals={}
-
-    for hnum in range(0,4):
-        c.cd(hnum+1)
-        gPad.SetLogy(1)
-        hname = "h"+htypes[hnum]+fileHistString
-        data.Draw("pix>>"+hname+pixbinning,regioncuts[hnum],"colz")
-        h = gDirectory.Get(hname)
-        histsThisFile.append(h)
-        if hnum==0:
-            badFit = skipper_utils.fitPeaksGaus(h,gain,fitvals)
-        if not badFit:
-            skipper_utils.fitPeaksPoisson(fitfunc,h,fitvals)
-
-    c.cd()
-    c.Print(outfilename+".pdf");
-
-sumHistDict={}#setting string to list of histograms
-gStyle.SetOptStat(0)
-c.Clear()
-c.Divide(len(settingListDict[settingNames[0]]),len(settingListDict[settingNames[1]]))
-for iHist in range(0,4):
-    settingStringList=["" for x in settingNames]
-    for settingWord0 in settingListDict[settingNames[0]]:
-        for settingWord1 in settingListDict[settingNames[1]]:
-            settingString = settingWord0+settingWord1
-            #print(settingString)
-            if settingString not in sumHistDict:
-                sumHistDict[settingString]=[]
-            #print(histDict[settingString])
-            sumHist = histDict[settingString][0][iHist].Clone(htypes[iHist]+settingString)
-            sumHistDict[settingString].append(sumHist)
-            sumHist.Reset()
-            for fileHists in histDict[settingString]:
-                sumHist.Add(fileHists[iHist])
-            canvasNum = settingListDict[settingNames[0]].index(settingWord0) + settingListDict[settingNames[1]].index(settingWord1)*len(settingListDict[settingNames[0]]) + 1
-            #print(canvasNum)
-            c.cd(canvasNum)
+    c.Divide(len(ohdus),len(htypes))
+    latex.DrawLatex(0.1,0.95,settingPrintString)
+    for iHdu in range(0,len(ohdus)):
+        data.SetEventList(ohduelists[iHdu])
+        fitvals={}
+        for iHist in range(0,len(htypes)):
+            c.cd(iHdu + iHist*len(ohdus) +1)
+            #c.cd(iHist+1)
             gPad.SetLogy(1)
-            sumHist.Draw()
-            fitvals={}
-            badFit = skipper_utils.fitPeaksGaus(sumHist,gain,fitvals)
+            hname = "h{0}{1}FILE{2}OHDU{3}".format(htypes[iHist],settingString,runnum,ohdus[iHdu])
+            data.Draw("pix>>"+hname+pixbinning,regioncuts[iHist],"colz")
+            h = gDirectory.Get(hname)
+            histString = "h{0}OHDU{1}".format(htypes[iHist],ohdus[iHdu])
+            histsThisFile[histString] = h
+            if iHist==0:
+                badFit = skipper_utils.fitPeaksGaus(h,gain,fitvals)
             if not badFit:
-                skipper_utils.fitPeaksPoisson(fitfunc,sumHist,fitvals)
-            latex.DrawLatex(0.3,0.8,settingString)
+                skipper_utils.fitPeaksPoisson(fitfunc,h,fitvals)
+        c.cd(iHdu + (len(htypes)-1)*len(ohdus) +1)
+        latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
     c.cd()
     c.Print(outfilename+".pdf");
+
+gStyle.SetOptStat(0)
+for iHdu in range(0,len(ohdus)):
+    for iHist in range(0,4):
+        c.Clear()
+        c.Divide(len(settingListDict[settingNames[0]]),len(settingListDict[settingNames[1]]))
+        sumHistList=[]#list of histograms
+        settingStringList=["" for x in settingNames]
+        for settingWord0 in settingListDict[settingNames[0]]:
+            for settingWord1 in settingListDict[settingNames[1]]:
+                settingString = settingWord0+settingWord1
+                hname = htypes[iHist]+settingString
+                histString = "h{0}OHDU{1}".format(htypes[iHist],ohdus[iHdu])
+                sumHist = histDict[settingString][0][histString].Clone(hname)
+                sumHistList.append(sumHist)
+                sumHist.Reset()
+                for fileHists in histDict[settingString]:
+                    sumHist.Add(fileHists[histString])
+                canvasNum = settingListDict[settingNames[0]].index(settingWord0) + settingListDict[settingNames[1]].index(settingWord1)*len(settingListDict[settingNames[0]]) + 1
+                c.cd(canvasNum)
+                gPad.SetLogy(1)
+                sumHist.Draw()
+                fitvals={}
+                badFit = skipper_utils.fitPeaksGaus(sumHist,gain,fitvals)
+                if not badFit:
+                    skipper_utils.fitPeaksPoisson(fitfunc,sumHist,fitvals)
+                latex.DrawLatex(0.3,0.8,settingString)
+            canvasNum = settingListDict[settingNames[0]].index(settingWord0) + (len(settingListDict[settingNames[1]])-1)*len(settingListDict[settingNames[0]]) + 1
+            c.cd(canvasNum)
+            latex.DrawLatex(0.4,0.025,settingWord0)
+        for settingWord1 in settingListDict[settingNames[1]]:
+            canvasNum = settingListDict[settingNames[1]].index(settingWord1)*len(settingListDict[settingNames[0]]) + 1
+            c.cd(canvasNum)
+            latex.SetTextAngle(90)
+            latex.DrawLatex(0.05,0.5,settingWord1)
+            latex.SetTextAngle(0)
+        c.cd()
+        latex.DrawLatex(0.4,0.95,"OHDU{0},{1}".format(ohdus[iHdu],htypes[iHist]))
+        c.Print(outfilename+".pdf");
 
 print settingListDict
 c.Print(outfilename+".pdf]");

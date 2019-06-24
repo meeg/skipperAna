@@ -50,8 +50,11 @@ def fitPeaksGaus(h,gain,fitvals):
 
 def fitPeaksPoisson(fitfunc,h,fitvals):
     fitfunc.SetParameters(h.GetEntries()*h.GetXaxis().GetBinWidth(1),fitvals["zero"],fitvals["gain"],fitvals["noise"],0.01)
-    h.Fit(fitfunc,"QS","",fitvals["zero"]-0.5*fitvals["gain"],fitvals["zero"]+2.5*fitvals["gain"])
-    return h.Fit(fitfunc,"QSL","",fitvals["zero"]-0.5*fitvals["gain"],fitvals["zero"]+2.5*fitvals["gain"])
+    h.Fit(fitfunc,"QS","",fitvals["zero"]-0.5*fitvals["gain"],fitvals["zero"]+1.5*fitvals["gain"])
+    s = h.Fit(fitfunc,"QSL","",fitvals["zero"]-0.5*fitvals["gain"],fitvals["zero"]+1.5*fitvals["gain"])
+    fitfunc.SetRange(fitvals["zero"]-0.5*fitvals["gain"],fitvals["zero"]+1.5*fitvals["gain"])
+    fitfunc.DrawCopy("same")
+    return s
 
 def poissonFitfunc():
     funcformulas = []

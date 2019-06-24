@@ -17,14 +17,12 @@ READOUT = 1.0*60+27 #minutes, per file
 
 NROWS = 700 #number of rows read out, per file
 
-OHDU = 1
-
 gain = 300
 
 OHDPLOTS = False
 OSMPLOTS = False
 
-options, remainder = getopt.gnu_getopt(sys.argv[1:], 'e:r:g:o:h', ['exposure','readout','gain','ohdu','help'])
+options, remainder = getopt.gnu_getopt(sys.argv[1:], 'e:r:g:h', ['exposure','readout','gain','help'])
 
 for opt, arg in options:
     if opt in ('-e', '--exposure'):
@@ -33,15 +31,12 @@ for opt, arg in options:
         READOUT = float(arg)
     if opt in ('-g', '--gain'):
         gain = float(arg)
-    if opt in ('-o', '--ohdu'):
-        OHDU = int(arg)
     elif opt in ('-h', '--help'):
         print "\nUsage: "+sys.argv[0]+" <output basename> <root files>"
         print "Arguments: "
         print "\t-e, --exposure: exposure time (minutes) for normalization"
         print "\t-r, --readout: readout time (minutes) for normalization"
         print "\t-g, --gain: initial guess for gain (ADU per electron)"
-        print "\t-o, --ohdu: HDU to analyze"
         print "\n"
         sys.exit(0)
 
@@ -51,7 +46,8 @@ if (len(remainder)<2):
     sys.exit()
 
 infiles = remainder[1:]
-infiles.sort(key=skipper_utils.decodeRunnum)
+#if len(infiles)>1:
+#    infiles.sort(key=skipper_utils.decodeRunnum)
 
 print(EXPOSURE,READOUT)
 #if (len(sys.argv)<3):
@@ -71,9 +67,9 @@ for i in range(0,len(infiles)):
     numRuns += 1
     thefile = TFile(infiles[i])
     header = thefile.Get("headerTree_0")
-    ogl = skipper_utils.getHeaderValue(header,"OGAL")
-    swl = skipper_utils.getHeaderValue(header,"SWAL")
-    print("OGL={0}, SWL={1}".format(ogl,swl))
+    #ogl = skipper_utils.getHeaderValue(header,"OGAL")
+    #swl = skipper_utils.getHeaderValue(header,"SWAL")
+    #print("OGL={0}, SWL={1}".format(ogl,swl))
 
 
 #x=0 and y=0 look weird (negative or extreme values)
@@ -100,6 +96,9 @@ binwidth = (pixmax-pixmin)/pixnbin
 c = TCanvas("c","c",1200,900);
 c.Print(outfilename+".pdf[")
 
+latex = TLatex()
+latex.SetNDC(True)
+
 c.SetLogy(1)
 
 
@@ -109,7 +108,7 @@ ohduelists = []
 fitvals = []
 badFitList = []
 
-for ohdu in range(1,5):
+for ohdu in range(0,6):#LTA data has 1 through 4, Monsoon data has 2 through 5
     elistname = "e{0}".format(ohdu)
     n = data.Draw(">>"+elistname,"ohdu=={0}".format(ohdu))
     if n>0:
@@ -122,27 +121,6 @@ if (OSMPLOTS):
     else:
         osm.Draw("osm","spl>5")
     c.Print(outfilename+".pdf");
-
-if (OHDPLOTS):
-    c.Clear()
-    c.Divide(1,5)
-    for i in range(1,6):
-        c.cd(i)
-        gPad.SetLogy(1)
-        data.Draw("pix>>h{0}{1}".format(i,pixbinning),"x>8 && y>0 && ohdu=={0}".format(i),"colz")
-        h = gDirectory.Get("h{0}".format(i))
-    c.cd()
-    c.Print(outfilename+".pdf");
-    for i in range(1,6):
-        c.cd(i)
-        gPad.SetLogy(1)
-        data.Draw("pix>>h{0}{1}".format(i,pixbinning),"x>369 && y>0 && ohdu=={0}".format(i),"colz")
-        h = gDirectory.Get("h{0}".format(i))
-    c.cd()
-    c.Print(outfilename+".pdf");
-    c.Clear()
-
-ohducut = "ohdu=={0}".format(OHDU)
 
 hists = []
 c.Clear()
@@ -159,6 +137,7 @@ for iHdu in range(0,len(ohdus)):
 
     fitvals.append({})
     badFitList.append(skipper_utils.fitPeaksGaus(hists[iHdu],gain,fitvals[iHdu]))
+    latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
 
 c.cd()
 c.Print(outfilename+".pdf");
@@ -171,6 +150,7 @@ for iHdu in range(0,len(ohdus)):
     if not badFitList[iHdu]:
         s = skipper_utils.fitPeaksPoisson(fitfunc,hists[iHdu],fitvals[iHdu])
         badFitList[iHdu] = (int(s)!=0)
+    latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
 
 c.cd()
 c.Print(outfilename+".pdf");
@@ -191,14 +171,12 @@ htypes = ["prescan","overscan_x","overscan_y","active"]
 regioncuts = ["x>0 && x<8 && y>0","x>369 && y>0","x>=8 && x<=369 && y>624","x>=8 && x<=369 && y>0 && y<=624"]
 exposures = [0.0, (362.0/450)*READOUT/NROWS, READOUT*(624.0/NROWS), 0.5*READOUT*(624.0/NROWS)+EXPOSURE]
 
-latex = TLatex()
-latex.SetNDC(True)
 c.Clear()
 c.Divide(len(ohdus),4)
 histList = [] #not used, but needed so Python doesn't delete the histograms
 for iHdu in range(0,len(ohdus)):
     data.SetEventList(ohduelists[iHdu])
-    for hnum in range(0,4):
+    for hnum in range(0,len(htypes)):
         c.cd(iHdu + hnum*len(ohdus) +1)
         gPad.SetLogy(1)
         hname = "h{0}{1}".format(ohdus[iHdu],htypes[hnum])
@@ -213,6 +191,8 @@ for iHdu in range(0,len(ohdus)):
                 #arrActiveTime.append(exposures[hnum])
                 #arrZero.append(0.0)
                 latex.DrawLatex(0.3,0.8,"mu={0} \pm {1}".format(s.Parameter(4),s.Error(4)))
+    c.cd(iHdu + (len(htypes)-1)*len(ohdus) +1)
+    latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
 
 
 c.cd()
@@ -252,11 +232,13 @@ for iHdu in range(0,len(ohdus)):
         #data.Draw("ele>>hdata(500,-1,4)","x>8 && y>0 && "+ohducut,"colz")
         #c.Print(outfilename+".pdf");
 
-        for hnum in range(0,4):
+        for hnum in range(0,len(pixcuts)):
             c.cd(iHdu + hnum*len(ohdus) +1)
             hname = "h2d{0}_{1}".format(ohdus[iHdu],pixcuts[hnum][0])
             binning = "(450,-0.5,449.5,700,-0.5,699.5)"
             print data.Draw("y:x>>"+hname+binning,"x>0 && y>0 && "+pixcuts[hnum][1],"")
+    c.cd(iHdu + (len(pixcuts)-1)*len(ohdus) +1)
+    latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
 c.cd()
 c.Print(outfilename+".pdf");
 
@@ -306,6 +288,9 @@ for iHdu in range(0,len(ohdus)):
     h.Sumw2()
     h.Fit("linfunc","Q")
     gStyle.SetStatX(0.4)
+
+    c.cd(iHdu + 2*len(ohdus) +1)
+    latex.DrawLatex(0.4,0.025,"OHDU{0}".format(ohdus[iHdu]))
 
 c.cd()
 c.Print(outfilename+".pdf");
