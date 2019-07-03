@@ -1,4 +1,12 @@
-*.root
-*.dat
+# BackUp
+*~
+*.swp
+
+# Images and raw data
 *.fits
+*.fits.fz
+*.dat
+
+# Processed data and plots
+*.root
 *.pdf
